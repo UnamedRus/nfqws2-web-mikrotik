@@ -29,17 +29,17 @@ RUN set -eux; \
     curl -fsSL "https://github.com/bol-van/zapret2/releases/download/v${ZAPRET2_VERSION}/zapret2-v${ZAPRET2_VERSION}-openwrt-embedded.tar.gz" -o z.tgz; \
     tar xzf z.tgz; \
     Z="zapret2-v${ZAPRET2_VERSION}"; \
-    mkdir -p /out/usr/bin /out/etc/nfqws2/lua; \
+    mkdir -p /out/usr/bin /out/usr/share/nfqws2/lua; \
     cp "$Z/binaries/$ZDIR/nfqws2" /out/usr/bin/nfqws2; \
     chmod +x /out/usr/bin/nfqws2; \
-    cp "$Z"/lua/*.lua.gz /out/etc/nfqws2/lua/; \
-    for f in /out/etc/nfqws2/lua/*.lua.gz; do gunzip -f "$f"; done; \
+    cp "$Z"/lua/*.lua.gz /out/usr/share/nfqws2/lua/; \
+    for f in /out/usr/share/nfqws2/lua/*.lua.gz; do gunzip -f "$f"; done; \
     curl -fsSL "https://github.com/nfqws/nfqws2-keenetic/archive/refs/tags/v${NFQWS2_KEENETIC_VERSION}.tar.gz" -o kt.tgz; \
     tar xzf kt.tgz; \
     K="nfqws2-keenetic-${NFQWS2_KEENETIC_VERSION}"; \
-    cp -r "$K/etc/nfqws2/lists" /out/etc/nfqws2/lists; \
-    cp -r "$K/etc/nfqws2/blobs" /out/etc/nfqws2/blobs; \
-    sed 's#/opt/#/#g' "$K/etc/nfqws2/nfqws2.conf" > /out/etc/nfqws2/nfqws2.conf.default
+    cp -r "$K/etc/nfqws2/lists" /out/usr/share/nfqws2/lists; \
+    cp -r "$K/etc/nfqws2/blobs" /out/usr/share/nfqws2/blobs; \
+    sed 's#/opt/#/#g' "$K/etc/nfqws2/nfqws2.conf" > /out/usr/share/nfqws2/nfqws2.conf.default
 
 # --- Final runtime image ---
 FROM alpine

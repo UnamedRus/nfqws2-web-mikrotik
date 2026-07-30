@@ -19,6 +19,10 @@ fi
 touch /var/log/nfqws2.log /var/log/nfqws2-debug.log 2>/dev/null || true
 chown -R nobody /etc/nfqws2/lists /var/log/nfqws2.log /var/log/nfqws2-debug.log 2>/dev/null || true
 
+# Gateway role: enable IPv4/IPv6 forwarding so routed client traffic passes through the container.
+sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
+sysctl -w net.ipv6.conf.all.forwarding=1 >/dev/null 2>&1 || true
+
 # Gateway role: masquerade routed client traffic outbound (native nft), as wiktorbgu does.
 nft add table ip nat 2>/dev/null || true
 nft add chain ip nat postrouting '{ type nat hook postrouting priority srcnat; }' 2>/dev/null || true

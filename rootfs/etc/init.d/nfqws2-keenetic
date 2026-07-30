@@ -1,0 +1,144 @@
+#!/bin/sh
+# nfqws2 service — native nftables, container-adapted.
+# Firewall rules are a 1:1 nft translation of nfqws2-keenetic's NFQUEUE ruleset.
+# _startup_args is derived verbatim from nfqws2-keenetic (engine-agnostic).
+
+CONFFILE=/etc/nfqws2/nfqws2.conf
+NFQWS_BIN=/usr/bin/nfqws2
+PIDFILE=/var/run/nfqws2.pid
+NFT_TABLE=nfqws2
+REINJECT_MARK=0x40000000   # mark nfqws2 sets on packets it already handled
+MAX_PKT=15
+
+[ -f "$CONFFILE" ] && . "$CONFFILE"
+
+is_running() {
+  [ -f "$PIDFILE" ] || return 1
+  PID_SAVED=$(cat "$PIDFILE" 2>/dev/null)
+  [ -n "$PID_SAVED" ] || return 1
+  kill -0 "$PID_SAVED" 2>/dev/null || return 1
+  return 0
+}
+
+status_service() {
+  if is_running; then
+    echo 'Service NFQWS2 is running'
+  else
+    echo 'Service NFQWS2 is stopped'
+  fi
+}
+
+reload_service() {
+  if ! is_running; then
+    echo 'Service NFQWS2 is not running' >&2
+    return 1
+  fi
+  echo 'Reloading NFQWS2 service...'
+  kill -HUP "$(cat "$PIDFILE")"
+}
+
+_ports_nft() { echo "$1" | sed 's/:/-/g'; }   # keenetic uses 590:600, nft wants 590-600
+
+_startup_args() {
+  args="--user=$USER --qnum=$NFQUEUE_NUM $NFQWS_BASE_ARGS"
+
+  iface_count=$(echo $ISP_INTERFACE | wc -w)
+  if [ "$iface_count" -gt 1 ]; then
+    args="$args --bind-fix4"
+    [ -n "$IPV6_ENABLED" ] && [ "$IPV6_ENABLED" -ne 0 ] && args="$args --bind-fix6"
+  fi
+
+  if [ "${LOG_LEVEL:-0}" -eq 1 ]; then
+    if [ -n "$LOG_DEBUG_PATH" ]; then
+      args="--debug=$LOG_DEBUG_PATH $args"
+    else
+      args="--debug=syslog $args"
+    fi
+  fi
+
+  [ -n "$NFQWS_ARGS_CUSTOM" ] && args="$args $NFQWS_ARGS_CUSTOM --new"
+  [ -n "$NFQWS_ARGS_UDP" ] && args="$args $NFQWS_ARGS_UDP --new"
+
+  if [ -n "$NFQWS_ARGS_QUIC" ]; then
+    [ -n "$NFQWS_ARGS_IPSET" ] && args="$args $NFQWS_ARGS_QUIC $NFQWS_ARGS_IPSET --ipset-ip=0.0.0.0 --new"
+    args="$args $NFQWS_ARGS_QUIC $NFQWS_EXTRA_ARGS --new"
+  fi
+
+  [ -n "$NFQWS_ARGS_IPSET" ] && args="$args $NFQWS_ARGS $NFQWS_ARGS_IPSET --ipset-ip=0.0.0.0 --new"
+  args="$args $NFQWS_ARGS $NFQWS_EXTRA_ARGS"
+
+  echo "$args"
+}
+
+_fw_start() {
+  N="$NFQUEUE_NUM"
+  TCP=$(_ports_nft "$TCP_PORTS")
+  UDP=$(_ports_nft "$UDP_PORTS")
+
+  POST=""
+  PRE=""
+  for IFACE in $ISP_INTERFACE; do
+    POST="$POST
+      oifname \"$IFACE\" meta mark and $REINJECT_MARK != $REINJECT_MARK udp dport { $UDP } ct original packets 1-$MAX_PKT queue num $N bypass
+      oifname \"$IFACE\" meta mark and $REINJECT_MARK != $REINJECT_MARK tcp dport { $TCP } ct original packets 1-$MAX_PKT queue num $N bypass
+      oifname \"$IFACE\" meta mark and $REINJECT_MARK != $REINJECT_MARK tcp dport { $TCP } tcp flags fin queue num $N bypass
+      oifname \"$IFACE\" meta mark and $REINJECT_MARK != $REINJECT_MARK tcp dport { $TCP } tcp flags rst queue num $N bypass"
+    PRE="$PRE
+      iifname \"$IFACE\" meta mark and $REINJECT_MARK == $REINJECT_MARK return
+      iifname \"$IFACE\" meta mark and $REINJECT_MARK != $REINJECT_MARK udp sport { $UDP } ct reply packets 1-$MAX_PKT queue num $N bypass
+      iifname \"$IFACE\" meta mark and $REINJECT_MARK != $REINJECT_MARK tcp sport { $TCP } ct reply packets 1-$MAX_PKT queue num $N bypass
+      iifname \"$IFACE\" meta mark and $REINJECT_MARK != $REINJECT_MARK tcp sport { $TCP } tcp flags syn,ack queue num $N bypass
+      iifname \"$IFACE\" meta mark and $REINJECT_MARK != $REINJECT_MARK tcp sport { $TCP } tcp flags fin queue num $N bypass
+      iifname \"$IFACE\" meta mark and $REINJECT_MARK != $REINJECT_MARK tcp sport { $TCP } tcp flags rst queue num $N bypass"
+  done
+
+  nft delete table inet $NFT_TABLE 2>/dev/null || true
+  nft -f - <<EOF
+table inet $NFT_TABLE {
+  chain post {
+    type filter hook postrouting priority mangle; policy accept;$POST
+  }
+  chain pre {
+    type filter hook prerouting priority mangle; policy accept;$PRE
+  }
+}
+EOF
+}
+
+_fw_stop() {
+  nft delete table inet $NFT_TABLE 2>/dev/null || true
+}
+
+system_config() {
+  sysctl -w net.netfilter.nf_conntrack_checksum=0 >/dev/null 2>&1 || true
+  sysctl -w net.netfilter.nf_conntrack_tcp_be_liberal=1 >/dev/null 2>&1 || true
+}
+
+start_service() {
+  if is_running; then
+    echo 'Service NFQWS2 is already running' >&2
+    return 0
+  fi
+  modprobe -a -q nfnetlink_queue nf_conntrack >/dev/null 2>&1 || true
+  system_config
+  _fw_start
+  # shellcheck disable=SC2046
+  $NFQWS_BIN --daemon --pidfile="$PIDFILE" $(_startup_args)
+}
+
+stop_service() {
+  _fw_stop
+  if is_running; then
+    kill "$(cat "$PIDFILE")" 2>/dev/null
+  fi
+  rm -f "$PIDFILE"
+}
+
+case "$1" in
+  start)   start_service ;;
+  stop)    stop_service ;;
+  restart) stop_service; start_service ;;
+  reload)  reload_service ;;
+  status)  status_service ;;
+  *) echo "Usage: $0 {start|stop|restart|reload|status}" >&2; exit 1 ;;
+esac

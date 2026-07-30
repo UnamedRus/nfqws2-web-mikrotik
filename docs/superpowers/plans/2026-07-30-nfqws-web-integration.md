@@ -434,7 +434,7 @@ RUN set -eux; \
 FROM alpine
 RUN apk add --no-cache \
       nftables iproute2 \
-      lighttpd lighttpd-mod-cgi lighttpd-mod-setenv lighttpd-mod-rewrite lighttpd-mod-redirect \
+      lighttpd \
       php83-cgi php83-session php83-curl php83-ctype php83-openssl \
       netcat-openbsd curl tzdata ca-certificates tini && \
     ln -sf php-cgi83 /usr/bin/php-cgi && \

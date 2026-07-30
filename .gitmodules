@@ -1,0 +1,3 @@
+[submodule "nfqws-keenetic-web"]
+	path = nfqws-keenetic-web
+	url = https://github.com/nfqws/nfqws-keenetic-web.git
